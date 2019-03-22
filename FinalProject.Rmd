@@ -1,0 +1,376 @@
+---
+title: "Data Exploration Final Project"
+author: "Fise"
+date: "March 11, 2019"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+## Introduction and Hypotheses
+We chose to work with the IMDB data to explore whether economic conditions had substantial effects on the movie business. We were most interested in whether economic conditions had any effect on the types of movies that were made. For example, during times of economic hardships, do writers prioritize telling stories that are more focused on drama than comedy? To evaluate this question, we looked primarily at the title_basics dataset within the IMDB data family. We cross-referenced this against economic data on FRED, the Federal Reserve Bank of St. Louis's economic data.
+
+We imported seasonally-adjusted monthly unemployment data from Fred to guage economic conditions. We decided on unemployment data over other economic indicators, say GDP, since the unemployment rate is most directly felt by society and therefre most revealing in terms of how art/film may have changed.
+
+Our initial hypothesis was that during times of economic boom, genres like comedy and action would be more popular. Conversely, we guessed that during times of economic recession, genres like drama and even maybe horror would decline, reflecting a more morose societal sentiment.
+
+Further, we were interested to assess what affect economic recessions might have on the total number of titles produced annually. Movies are a time consuming process the requires years of planning, talent casting, and production. As such, we predicted that we would likely see a lag between periods of recession and potential overall title decrease or decrease in rate of titles produced.
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(ggplot2)
+library(lubridate)
+library(ggcorrplot)
+library(gganimate)
+title_basics <- get(load("D:/Winter Quarter/DECS922/Final Projects/title_basics_sub.Rdata"))
+name_basics <-load("D:/Winter Quarter/DECS922/Final Projects/name_basics_sub.Rdata")
+title_crew <-load("D:/Winter Quarter/DECS922/Final Projects/title_crew_sub.Rdata")
+UnRate <- read_csv("D:/Winter Quarter/DECS922/Final Projects/UNRATE.csv")
+Recession <- read_csv("D:/Winter Quarter/DECS922/Final Projects/Recession.csv")
+glimpse(UnRate)
+```
+
+##Making changes in unemployment data
+We used lubridate package to extract month and year data from the unememployment data. 
+
+```{r}
+unemployment <-read_csv("D:/Winter Quarter/DECS922/Final Projects/UNRATE.csv")
+glimpse(unemployment)
+
+unemployment<-unemployment%>%
+  mutate(NDATE=ymd(DATE))
+
+unemployment<-unemployment%>%
+  mutate(year=year(NDATE))%>%
+  mutate(month=month(NDATE))
+glimpse(unemployment)
+```
+Next, we used "spread" on "month" column, so that we can caluclate annual average umemplyment rate for each year since 1950. This data structure would also help us assess whether unemployment rate increased or decreased during the year. 
+```{r}
+unemploymentExp<-select(unemployment, -DATE, -NDATE)
+glimpse(unemploymentExp)
+
+unemploymentExp<- unemploymentExp%>%
+  spread(key=month,value=UNRATE)
+glimpse(unemploymentExp)
+        
+```
+
+```{r}
+colnames(unemploymentExp) <- c("year", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+glimpse(unemploymentExp)
+
+```
+
+```{r}
+unemploymentExp<-unemploymentExp%>%
+  mutate(meanUnrate=((Jan+Feb+Mar+Apr+May+Jun+Jul+Aug+Sep+Oct+Nov+Dec)/12))%>%
+  mutate(trend=(Jan-Dec))%>%
+  mutate(increase=if (trend >= 0) 1 else 0)
+
+glimpse(unemploymentExp)
+```
+
+```{r}
+
+ggplot(unemployment, aes(x = NDATE, y = year, color = month))+
+  geom_point()
+```
+
+```{r}
+
+unemploymentNew<-unemployment%>%
+  group_by(year)%>%
+  summarise(AnnualUnrate=mean(UNRATE))
+glimpse(unemploymentNew)
+```
+## Combining the Movie Dataset and Unemployment Dataset
+
+Next, we combined the movie and unemployment data using "left_join". In order to perform this join, first, we had to transform the movie data. Second, we also plotted and checked the combined data.  
+
+
+```{r}
+transform(title_basics, startYear = as.numeric(startYear))
+t_basics <- title_basics %>% mutate(Year = as.numeric(startYear))
+str(t_basics)
+combined <- unemploymentNew %>% left_join(t_basics, by = c('year'='Year'))
+combined %>% group_by(AnnualUnrate) %>% ggplot(aes(x=year, y=AnnualUnrate)) + geom_line()
+ggplot(combined, aes(x=year, y=AnnualUnrate)) + geom_line()
+combined1 <- filter(combined,year > '1949')
+combined1
+```
+
+
+## Exploring Genres
+Next, we checked the number of unique genre. 
+
+There are over 1,300 different combinations of genres. That complicates our problem. We need to figure out a way to get those genres into a more manageable format. For the purposes of this project, it is probably appropriate to group these into 10 leading genres.
+
+```{r eval=FALSE}
+unique(combined$genres)
+```
+
+```{r}
+test <- combined %>% mutate(genres=str_split(genres, ',')) %>% unnest(genres)
+glimpse(test)
+```
+
+#
+Subsequently, we split each genre array into multiple rows to isolate the different types of subgenres. Obviously, this will lead to some double-counting of genres, but that does not necessarily change our findings. For example, an animated drama could still reflect some general societal desperation even thought it technically falls into two different genres.
+
+We want to create a dataframe that enables us to sum the top 10 genres across the data.
+
+```{r}
+test1 <- mutate(test, Counter=1)
+test2 <- test1 %>% spread(key=genres, value=Counter)
+genresums <- test1 %>% group_by(genres) %>% summarize(sum = sum(Counter))
+glimpse(genresums)
+```
+#
+Based on the "genresums" dataset, we found that the top 10 genres from 1950 on are: Drama, Documentary, Comedy, Action, Romance, Thriller, Crime, Horror, Adventure, and Family. Next, we will now going to plot the genres' popularity over time.
+
+```{r}
+top10 <- filter(test, genres == 'Drama' | genres == 'Documentary' | genres == 'Comedy' | genres == 'Action' | genres == 'Romance' | genres == 'Thriller' | genres == 'Crime' | genres == 'Horror' | genres == 'Adventure' | genres == 'Family') 
+top10 %>% group_by(genres) %>% ggplot(aes(x=year, color=genres, fill=genres)) + geom_line(stat='count') + facet_wrap(~genres)
+```
+#
+This is an interesting graph, but it gives us aggregate numbers over time. However, what we are really concerned with is how the proportions of different genres change over time. Specifically, our group is most interested in how the top ten genres compare to each *other*.
+
+## Finding the proportion of genre per year
+The first step in finding genre year-wise was to replace "NA" with zero. Subsequently, we calculated number of moview of each genre year-wise by grouping the data by year and summinng up the genre instances in that year. 
+
+Calculating total number of unqiue movies each year was tricky. For this calculation, we again took a step-wise approach. First, we removed the duplicate movies by just retaining the unique IDs ("tconst"), and the summing the number of unqiue Ids year wise. 
+
+Next, we combined all the individual genre result, and subsequently, calculated the propotion of movies of each genre year-wise. 
+
+```{r}
+test2[is.na(test2)]<-0
+
+Result1 <- test2 %>%
+  group_by(year)%>%
+  summarise(Drama = sum(Drama))
+
+Result2 <- test2 %>%
+  group_by(year)%>%
+  summarise(Documentary = sum(Documentary))
+
+Result3 <- test2 %>%
+  group_by(year)%>%
+  summarise(Comedy = sum(Comedy))
+
+Result4 <- test2 %>%
+  group_by(year)%>%
+  summarise(Action = sum(Action))
+
+Result5 <- test2 %>%
+  group_by(year)%>%
+  summarise(Romance = sum(Romance))
+
+Result6 <- test2 %>%
+  group_by(year)%>%
+  summarise(Thriller = sum(Thriller))
+
+Result7 <- test2 %>%
+  group_by(year)%>%
+  summarise(Crime = sum(Crime))
+
+Result8 <- test2 %>%
+  group_by(year)%>%
+  summarise(Horror = sum(Horror))
+
+Result9 <- test2 %>%
+  group_by(year)%>%
+  summarise(Adventure = sum(Adventure))
+
+Result10 <- test2 %>%
+  group_by(year)%>%
+  summarise(Family = sum(Family))
+glimpse(test1)
+
+test3 <- test1%>%
+  distinct(tconst, .keep_all = TRUE)
+
+Result11 <- test3 %>%
+  group_by(year)%>%
+  summarise(Total=sum(Counter))
+
+glimpse(Result11)
+```
+```{r}
+
+Result <- Result1 %>% 
+  left_join(Result2, by = c('year'='year'))%>%
+  left_join(Result3, by=c('year'='year'))%>%
+  left_join(Result4, by=c('year'='year'))%>%
+  left_join(Result5, by=c('year'='year'))%>%
+  left_join(Result6, by=c('year'='year'))%>%
+  left_join(Result7, by=c('year'='year'))%>%
+  left_join(Result8, by=c('year'='year'))%>%
+  left_join(Result9, by=c('year'='year'))%>%
+  left_join(Result10, by=c('year'='year'))%>%
+  left_join(Result11, by=c('year'='year'))%>%
+  left_join(unemploymentNew, by=c('year'='year'))
+
+glimpse(Result)
+```
+
+
+```{r}
+Result <- Result%>%
+  mutate(DramaP=(Drama/Total))%>%
+  mutate(DocumentaryP=(Documentary/Total))%>%
+  mutate(ComedyP=(Comedy/Total))%>%
+  mutate(ActionP=(Action/Total))%>%
+  mutate(RomanceP=(Romance/Total))%>%
+  mutate(ThrillerP=(Thriller/Total))%>%
+  mutate(CrimeP=(Crime/Total))%>%
+  mutate(HorrorP=(Horror/Total))%>%
+  mutate(AdventureP=(Adventure/Total))%>%
+  mutate(FamilyP=(Family/Total))
+glimpse(Result)
+
+```
+##Analysis of the variation in genre over the years
+We created two sample graphs plotting different genre against Unemployment rate to figure out relationship. However, plotting each genre's graph individually was inefficent. That' why we created matrix of just genre propotion and used "gather" function on different genre to make it easier for plotting graph. 
+
+```{r}
+
+Result %>%
+  ggplot(aes(year, value, col=variable))+
+  geom_point(aes(y=DramaP, col='DramaP'))+
+  geom_point(aes(y=AnnualUnrate, col='Unemployment'))
+```
+
+```{r}
+Result %>%
+  ggplot(aes(x=year, y=AnnualUnrate))+
+  geom_point()+
+  geom_smooth()+
+  geom_point(aes(x=year, y=DramaP, col='DramaP'), col="red")+
+  geom_point(aes(x=year, y=DocumentaryP, col="DocumentaryP"), col="blue")+
+  geom_point(aes(x=year, y=ActionP), col="green")
+```
+
+```{r}
+ResultF<- Result%>%
+  select(-Drama, -Documentary, -Comedy, -Action, -Romance, -Thriller, -Crime, -Horror, -Adventure, -Family)
+
+ResultF <- ResultF%>%
+  gather(DramaP, DocumentaryP, ComedyP, ActionP, RomanceP, ThrillerP, CrimeP, HorrorP, AdventureP, FamilyP, key='genre', value='propotion')
+
+glimpse(ResultF)
+```
+#Plotting all the genre and annual unemployment rates against year 
+
+First, we tried plotting all the proportions of movies of different genre and annual unemployment rate vs year. While we could see some correlation, it wasn't concrete enough to make any assertions.
+
+Second, we tried individually plotting all the proportions of movies of different genre and annual unemployment rate vs year. These plots gave us some insights about the variation of the proportion of movies over the years. However, a better proposition seemed to mark recession points to check whether a recession had an impact on the proportion of movies from a different genre.
+
+```{r}
+ResultF%>%
+  ggplot(aes(x=year, y=propotion, col=genre))+
+  geom_point()+
+  geom_point(aes(x=year, y=AnnualUnrate))
+
+```
+
+
+```{r}
+ResultF%>%
+  ggplot(aes(x=year, y=propotion, col=genre))+
+  geom_line()+
+  facet_wrap(~genre)
+
+```
+
+```{r}
+ResultF%>%
+  ggplot(aes(x=year, y=propotion, size=propotion,col=genre))+
+  geom_point()
+
+```
+
+#Recession and Proportion of Films of Different Genre
+Recession periods certainly seem to have a lagging effect on movies of certain genres. Prima facie, comedy and romance seem to be affected. However, in order to establish a correlation with reasonable confidence, we need to check the correlation coefficients.
+
+Next, we plotted the log of the total number of movies over the years and marked the recession periods. On an aggregate basis, there seems to be a clear the lagging effect of the recession. Post-recession, the growth rate of 'the number of movies started each year' decreases.
+
+```{r}
+ggplot()+
+  geom_rect(aes(xmin =Recession$start, xmax = Recession$end, ymin = -Inf, ymax = Inf), alpha = 0.4)+
+  geom_line(data=ResultF, aes(x=year, y=propotion, col=genre))
+```
+
+
+```{r}
+ggplot()+
+  geom_rect(aes(xmin =Recession$start, xmax = Recession$end, ymin = -Inf, ymax = Inf), alpha = 0.4)+
+  geom_line(data=ResultF, aes(x=year, y=log(Total)))
+```
+
+#Calculation and Visualization of Correlation Cofficients 
+
+Finally, we calculated correlation coefficients of the proportion of different genres of movies with the annual unemployment rate. 
+
+However, some of the correlation might not be significant. Hence, we used p-value to disregard insignificant coefficients and plotted only the significant coefficients. 
+
+Next, we also regressed proportion of movies of Crime and Romance against annual unemployment rate, which are negatively correlated with annual unemployment rates.  
+
+```{r}
+##Correlating Unemployment with Genres
+ResultC<- Result%>%
+  select(-Drama, -Documentary, -Comedy, -Action, -Romance, -Thriller, -Crime, -Horror, -Adventure, -Family)
+ResultC <- ResultC %>% left_join(unemploymentNew, by='year')
+ResultC <-ResultC %>%
+  select(-year)
+
+MovEmployCorr <- cor(ResultC)
+MovEmployCorr
+```
+
+```{r}
+ggcorrplot(MovEmployCorr, method="circle")
+```
+
+```{r}
+# using hierarchical clustering
+
+ggcorrplot(MovEmployCorr, hc.order = TRUE, type = "lower", outline.col = "white", lab=TRUE)
+```
+
+```{r}
+# Compute a matrix of correlation p-values
+p.mat <- cor_pmat(MovEmployCorr)
+
+#Leave blank on no significant coefficient
+ggcorrplot(MovEmployCorr, p.mat = p.mat, hc.order = TRUE,type = "lower", insig = "blank")
+```
+```{r}
+# Create a scatter plot with `Romance Propotion` on the x-axis and `Annual Unemployment` on the y-axis
+ggplot(ResultC, aes(x = AnnualUnrate.y, y = RomanceP)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+
+RomanceRegression <- lm(RomanceP~AnnualUnrate.y, data=ResultC)
+summary(RomanceRegression)
+```
+```{r}
+# Create a scatter plot with `Crime Propotion` on the x-axis and `Annual Unemployment` on the y-axis
+ggplot(ResultC, aes(x = AnnualUnrate.y, y = CrimeP)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+
+CrimeRegression <- lm(CrimeP~AnnualUnrate.y, data=ResultC)
+summary(CrimeRegression)
+```
+
+#Results and Inferences
+As for our initial question, whether economic conditions influence the relative mix of genres produced, we found that the unemployment rate was negatively correlated with the proportion of romance & crime movies. Conversely, unemployment rate was most positively correlated with family moviews. These findings do somewhat align with our original hypothesis - it makes sense to us that general malaise might lead to movie goers seeking lighthearted entertainment.
+
+Assessing our line graph, it appears that recessions may lead to a period of decreased growth in total number of movies produced, but it is not marked. Upon literature review, several studies have found demand for cinema is relatively recession proof- in fact, UK cinemas enjoyed record admissions & revenue in 2009 and 2010. This likely reassures filmmakers that general economic conditions won't hurt attendance. Interestingly enough, while recession did not curb appetite for film, it did for the concession stand.[1] A quick review shows multiple articles that agree that the cinema industry is fairly robust to economic downturn. Another interesting study might be to analyze box office takes & ticket prices during recessions.
+
+One interesting finding was the absolute change in top ten genre titles over the last 20 years. From 1950 to 1999 the total number increased from 2036 to 4192, a compound annual growth rate of around 1.5%. By 2017 that number had exploded to greater than 15,000, representing a CAGR of over 7.3%. This could be due to several reasons: decreased barriers to entry for smaller and independent producers (likely due to decreased fixed costs secondary to technological advances), increased incentives for producers to make additional films in the form of increasing industry profits, increased novel avenues for film distribution (streaming), or increased reporting to the IMDB database, particularly as it pertains to foreign titles. Unfortunately, IMDB data does not list the country of origin for titles. This would have been an interesting analysis. It could be that films just generally have more genres listed in recent years, but this certainly does not account for such a dramatic increase.
+
+[1] Source: "The Big Screen Gets Bigger." Marketing, 22 Sept 2010, Academic OneFile, http://link.com/apps/doc/A237577480/AONE?u=northwestern&sid=AONE&xid=96dc5e48
